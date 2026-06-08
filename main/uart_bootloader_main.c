@@ -97,6 +97,22 @@ void sync_bootloader_v2()
     }
 }
 
+void flush()
+{
+    uint8_t flush_buf[64];
+    while (uart_read_bytes(ECHO_UART_PORT_NUM, flush_buf, sizeof(flush_buf), 10 / portTICK_PERIOD_MS) > 0) {}
+}
+
+void write_uart(uint8_t cmd[], size_t size)
+{
+    uart_write_bytes(ECHO_UART_PORT_NUM, (const char*)cmd, size);
+}
+
+int read_uart(void *buf, uint32_t length)
+{
+    return uart_read_bytes(ECHO_UART_PORT_NUM, buf, length, 2000 / portTICK_PERIOD_MS);
+}
+
 void app_main(void)
 {
     init();
@@ -108,27 +124,31 @@ void app_main(void)
     // uint8_t flush_buf[64];
     // while (uart_read_bytes(ECHO_UART_PORT_NUM, flush_buf, sizeof(flush_buf), 50 / portTICK_PERIOD_MS) > 0)
     //     ;
-    uint8_t flush_buf[64];
-    while (uart_read_bytes(ECHO_UART_PORT_NUM, flush_buf, sizeof(flush_buf), 10 / portTICK_PERIOD_MS) > 0) {}
+    /*uint8_t flush_buf[64];
+    while (uart_read_bytes(ECHO_UART_PORT_NUM, flush_buf, sizeof(flush_buf), 10 / portTICK_PERIOD_MS) > 0) {}*/
+    flush();
 
     // Step 3: Send Get command immediately (remove uart_wait_tx_done)
     uint8_t get_cmd[] = {0x00, 0xFF}; // 0x00 GET COMMAND LIST
-    uart_write_bytes(ECHO_UART_PORT_NUM, (const char*)get_cmd, 2);
+    write_uart(get_cmd, 2);
 
     // Step 4: Read response
     uint8_t ack;
-    int len = uart_read_bytes(ECHO_UART_PORT_NUM, &ack, 1, 2000 / portTICK_PERIOD_MS);
+    int len = read_uart(&ack, 1);
+    // int len = uart_read_bytes(ECHO_UART_PORT_NUM, &ack, 1, 2000 / portTICK_PERIOD_MS);
     if (len == 1 && ack == 0x79)
     {
         ESP_LOGI(TAG, "Get cmd ACK");
         // Read bootloader info...
         uint8_t num_bytes;
-        len = uart_read_bytes(ECHO_UART_PORT_NUM, &num_bytes, 1, 2000 / portTICK_PERIOD_MS);
+        len = read_uart(&num_bytes, 1);
+        // len = uart_read_bytes(ECHO_UART_PORT_NUM, &num_bytes, 1, 2000 / portTICK_PERIOD_MS);
         if (len == 1)
         {
             ESP_LOGI(TAG, "Bytes to follow: %d", num_bytes);
             uint8_t data[32];
-            len = uart_read_bytes(ECHO_UART_PORT_NUM, data, num_bytes, 2000 / portTICK_PERIOD_MS);
+            len = read_uart(data, num_bytes);
+            // len = uart_read_bytes(ECHO_UART_PORT_NUM, data, num_bytes, 2000 / portTICK_PERIOD_MS);
             if (len == num_bytes)
             {
                 ESP_LOGI(TAG, "Version: 0x%02X", data[0]);
@@ -137,7 +157,7 @@ void app_main(void)
                     ESP_LOGI(TAG, "Command: 0x%02X", data[i]);
                 }
                 // Read final ACK
-                len = uart_read_bytes(ECHO_UART_PORT_NUM, &ack, 1, 500 / portTICK_PERIOD_MS);
+                len = read_uart(&ack, 1);
                 if (len == 1 && ack == 0x79)
                 {
                     ESP_LOGI(TAG, "Get command complete!");
@@ -149,14 +169,15 @@ void app_main(void)
     {
         ESP_LOGI(TAG, "Get cmd NACK: 0x%02X", ack);
     }
-    while (uart_read_bytes(ECHO_UART_PORT_NUM, flush_buf, sizeof(flush_buf), 10 / portTICK_PERIOD_MS) > 0) {}
+    flush();
     uint8_t full_dump[bare_led_bin_len];
 
     for (int addr_offset = 0; addr_offset < bare_led_bin_len; addr_offset += CHUNK_SIZE)
     {
         uint8_t cmd[2] = {0x11, 0xEE};
         ESP_LOGI(TAG, "ready for dump");
-        uart_write_bytes(ECHO_UART_PORT_NUM, (char*)cmd, 2);
+        write_uart(cmd, 2);
+        // uart_write_bytes(ECHO_UART_PORT_NUM, (char*)cmd, 2);
 
         if (!wait_for_ack()) return;
         unsigned int chunk_len = bare_led_bin_len - addr_offset;
@@ -173,8 +194,10 @@ void app_main(void)
         };
 
         uint8_t addr_csum = addr_bytes[0] ^ addr_bytes[1] ^ addr_bytes[2] ^ addr_bytes[3];
-        uart_write_bytes(ECHO_UART_PORT_NUM, (char*)addr_bytes, 4);
-        uart_write_bytes(ECHO_UART_PORT_NUM, (char*)&addr_csum, 1);
+        write_uart(addr_bytes, 4);
+        write_uart(&addr_csum, 1);
+        // uart_write_bytes(ECHO_UART_PORT_NUM, (char*)addr_bytes, 4);
+        // uart_write_bytes(ECHO_UART_PORT_NUM, (char*)&addr_csum, 1);
 
         if (!wait_for_ack()) return;
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -186,14 +209,17 @@ void app_main(void)
         ESP_LOGI(TAG, "addr=0x%08lx chunk_len=%d N=%d",
                  addr, chunk_len, N);
 
-        uart_write_bytes(ECHO_UART_PORT_NUM, (char*)&N, 1);
-        uart_write_bytes(ECHO_UART_PORT_NUM, (char*)&n_csum, 1);
+        write_uart(&N, 1);
+        write_uart(&n_csum, 1);
+        // uart_write_bytes(ECHO_UART_PORT_NUM, (char*)&N, 1);
+        // uart_write_bytes(ECHO_UART_PORT_NUM, (char*)&n_csum, 1);
 
         vTaskDelay(pdMS_TO_TICKS(10));
         wait_for_ack();
 
         ESP_LOGI(TAG, "full_dump write");
-        const int r = uart_read_bytes(ECHO_UART_PORT_NUM, &full_dump[addr_offset], chunk_len, pdMS_TO_TICKS(1000));
+        int r = read_uart(&full_dump[addr_offset], chunk_len);
+        // const int r = uart_read_bytes(ECHO_UART_PORT_NUM, &full_dump[addr_offset], chunk_len, pdMS_TO_TICKS(1000));
 
         ESP_LOGI(TAG, "r=%d", r);
         if (r != chunk_len)
